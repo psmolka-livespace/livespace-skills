@@ -1,112 +1,89 @@
-# UI, responsive design & i18n — full reference
+# UI, layout & i18n — full reference
 
-Load this file when laying out the plugin or styling its states. Every plugin should feel like a polished, modern component — not a debug page.
+Load this file when laying out the plugin or styling its states. Every plugin should look like part of Livespace — not an embedded stranger, and not a debug page.
 
-> Future: when the Livespace design system is available as a shared dependency, the palette and component tokens below should be sourced from it rather than hardcoded here.
+> **Authoritative source for tokens:** <https://plugin-sdk.feature.livespace.dev/v1/docs/styling.md>.
 
-## Responsive design
+## Design tokens
 
-Plugins render inside iframes whose outer dimensions are set by the host. The **height** is a fixed admin choice (S/M/L preset, see below); the **width adapts** to the available space in the profile layout and narrows when a side panel opens. Treat width and height as independent — never assume a particular aspect ratio. Use `width: 100%` on the root container (not a fixed pixel width), relative units (`%`, `rem`) for padding and type, and test from **260 px** upward.
+Livespace publishes its design tokens — colours, spacing, radii, typography, shadows — as CSS. Use them instead of a hand-picked palette. Pick one file:
 
-### Width breakpoints
+```html
+<!-- Plain CSS custom properties, any stack, no build step -->
+<link rel="stylesheet" href="https://plugin-sdk.feature.livespace.dev/v1/ls-tokens.css" />
+```
 
-Support at minimum three width breakpoints:
+```css
+/* Tailwind 4: the same tokens as a theme (bg-purple-500, p-md, rounded-large, shadow-frame) */
+@import "tailwindcss";
+@import "https://plugin-sdk.feature.livespace.dev/v1/ls-theme.css";
+```
 
-| Breakpoint | Width range | Notes |
-|---|---|---|
-| micro   | `< 260px`     | tight spacing, small type |
-| default | `260–399px`   | target first |
-| wide    | `≥ 400px`     | more breathing room |
+- **Reach for the semantic aliases first:** `--color-primary` (+ `-hover`), `--color-destructive` (+ `-hover`), `--color-ring` for focus.
+- **Colours** are `--color-{gray|purple|green|red|yellow|orange|teal}-{step}`, plus `--color-white` and `--color-black-{700,800}`. Steps are sparse on purpose — a missing step is not an oversight; pick a neighbour. With Tailwind, the Livespace palette **replaces** Tailwind's, so `bg-red-600` or `bg-blue-*` simply do not exist.
+- **Spacing** `--spacing-{3xs,2xs,2xs-plus,xs,sm,regular,md,lg,xl,2xl,3xl}` (2–64 px), **radii** `--radius-{small,regular,medium,large,xlarge}`, **shadows** `--shadow-{sm,frame,lg}`, **type** `--text-variant-{h1…h6,body,paragraph,caption,caption-medium}` with `--font-weight`, `--line-height` and `--letter-spacing` companions.
+- **Tokens are in px, on purpose** — the host page runs a non-standard root font size and the iframe does not, so `rem` would render at different sizes in the two places. Use the tokens; don't convert them to `rem`.
+- **The font is opt-in:** `body { font-family: var(--font-sans); }` loads the Livespace typeface. Without it, the iframe gets the system font.
+- `v1` follows token retunes. Use the token, never its hex value. Pin a version (`…/1.2.0/ls-tokens.css`) only when you must freeze.
 
-Declare every numeric style as a CSS custom property at `:root` and override the set in `@media (min-width: 260px)` and `@media (min-width: 400px)`. Component selectors consume the variables — **never hardcode pixel sizes in component rules**.
+## Size and layout
 
-### Heights
+The host sets the iframe's outer size; the plugin fills it (`width: 100%`, `height: 100vh` on the root) and adapts.
 
-Heights are independent of width breakpoints. The admin picks one of three height presets — **Small 240 px / Medium 380 px / Large 540 px** (an exact custom height is on the Livespace roadmap). Design against all three. The plugin must remain functional at any height — short content should center or pad gracefully, long content should scroll inside the iframe (the host controls the iframe's `scrolling` attribute).
+- **Width** follows the profile column it is placed in, and narrows when a side panel opens. Support at least three ranges — under 260 px, 260–399 px, 400 px and up — and test from the narrowest column you declare.
+- **Height** is the admin's choice: one of the preset sizes or a custom height. Design for a range, not an exact number: short content centres or pads, long content scrolls **inside** the iframe. There is no message to resize the box from the plugin.
+- **Declare what you need.** `LsPlugin.declareMetadata({ minWidthPx, minHeightPx })` makes the admin screen disable columns that are too narrow and heights that are too short, and renders the preview at the width you need. Without it, an admin can place the plugin somewhere it cannot work.
 
-Plugin fills `100vh` of the iframe; the host controls outer dimensions via `iframe width=… height=…`.
+### Fullscreen and the dialog layout
 
-## Visual palette
+Livespace can show a plugin larger than its box — fullscreen, or a dialog over the page — but **only where an administrator has enabled it** for the plugin. Many installations never will, so the boxed layout must work on its own; treat the extra room as a bonus. The plugin requests neither; the Livespace chrome enters and leaves both, and the plugin reacts:
 
-| Token | Value | Used for |
-|---|---|---|
-| Ink | `#1a1a2e` | Primary text, hero numbers |
-| Accent | `#3b82f6` | Interactive elements, accents |
-| Muted | `#6b7280` | Subtitles, supporting text |
-| Mute-mute | `#9ca3af` | Tiny uppercase labels, icons |
-| Card bg | `#ffffff` | Plugin surface |
-| Page bg | `#f0f4f8` | Behind the card |
-| Soft hairline | `#f3f4f6` | Dividers, skeleton bg |
+- **Fullscreen.** `LsPlugin.on("fullscreen", (active) => …)` / `LsPlugin.isFullscreen`. Use the room: a denser table, more columns, a detail pane.
+- **Dialog.** The plugin is *not* told it is in a dialog — it just gets more room, and `isFullscreen` stays `false`. Say how big the dialog should be with `LsPlugin.setModalSize({ minWidthPx, maxWidthPx, minHeightPx, maxHeightPx })` (e.g. `{ maxWidthPx: 640 }` so a narrow form does not float in a wide dialog). The screen always wins over your minimums.
+
+Never call the browser's Fullscreen API — it is denied by the iframe's permissions.
 
 ## Plugin anatomy
 
-Even a minimal plugin benefits from a clear three-part structure:
-
 ```
 ┌─────────────────────────────────────┐
-│  HEADER LABEL              [action] │  ← small uppercase, optional action
+│  HEADER LABEL              [action] │  ← small label, optional action
 │                                     │
 │  Hero / primary content             │  ← the one thing this plugin shows
 │                                     │
-│  Supporting metadata · breakdown    │  ← context, deal name, computed inputs
+│  Supporting metadata · breakdown    │  ← context, record name, inputs
 └─────────────────────────────────────┘
 ```
 
-### Header (always present)
-
-- A short uppercase label (e.g. "Twoja prowizja", "Status deala", "Powiązane projekty") in `Mute-mute` color, `letter-spacing: 0.06–0.08em`, `font-weight: 600`.
-- Optional small action on the right: refresh icon, kebab menu, external-link arrow. Subtle — `Mute-mute` color, hover state in `Accent`.
-- The header is **visible in every state** — `loading`, `ready`, `not-applicable`, `error`. The plugin should be identifiable even when there's nothing to render below.
-
-### Hero content
-
-- The single most important value the plugin exists to show: a currency amount, a count, a status badge, a stage name, a CTA.
-- Type scale set via breakpoint CSS variables — large at `≥ 260px`, comfortable at `≥ 400px`.
-- `Ink` for the number/text, `Accent` only on small accent tokens (currency suffix, separators, deltas).
-
-### Supporting row
-
-- One-line metadata under the hero: deal name, breakdown of how the hero was computed, related entities, timestamp.
-- `Muted` color, smaller type, allowed to wrap. Use CSS-driven spacing (flex `column-gap`) rather than relying on template whitespace — template compilers strip leading/trailing whitespace inside elements.
+- **Header (always present):** a short label in a muted gray token, `--text-variant-caption-medium`; an optional subtle action on the right (refresh, external link). Visible in **every** state, so the plugin is identifiable even when there is nothing below it.
+- **Hero:** the single most important value — an amount, a count, a status, a CTA. Primary colour for the value; accent colours only on small details.
+- **Supporting row:** one line of metadata in a muted token, allowed to wrap. Use flex `column-gap` for spacing between bound and literal text — template compilers strip whitespace inside elements.
 
 ## State styling
 
-The four states are defined as standing behavior in `SKILL.md`. Style them as follows:
+The states are defined in `SKILL.md`. Style them as follows:
 
-### Loading / placeholder state
+- **Loading:** a skeleton that matches the final layout — not a spinner, not "Loading…". Bars at the real header / hero / supporting positions, light gray base, a 1.2–1.6 s shimmer. Hold it ~150 ms even when data is faster.
+- **Not applicable / not configured:** header visible, one calm centred sentence on why there is nothing to show. For `config === null`, say the plugin needs setting up and who can do it (an administrator).
+- **Error:** header visible, a warm tint (the yellow/orange tokens) so it differs from not-applicable, a short message and a text-link retry that re-runs the failed step — not a full iframe reload.
+- **Preview:** in `preview` mode there is no record. Render the real layout with sample data, so the admin sees what users will.
+- **Motion:** 120–200 ms opacity/translate on state change, no layout jumps, hover and `:focus-visible` on everything interactive, all motion gated behind `prefers-reduced-motion`.
 
-Show a **skeleton that matches the final layout** — not a spinner, not a blank plugin, not text saying "Loading…".
+For a transient outcome — "Saved", "Synced 12 records" — use a host toast rather than an inline banner: `LsPlugin.notify({ variant: "success", title: "Zapisano" })`. It is the one place a plugin can draw outside its frame. Toasts can't be persistent or carry a button, and faster than about one a second they are dropped.
 
-- Skeleton bars at the same vertical position and roughly the same width as the real header / hero / supporting row that will replace them.
-- Use the `Soft hairline` token as base; animate a subtle shimmer via a linear-gradient background-position keyframe (1.2–1.6 s).
-- Hold the skeleton for at least ~150 ms even if data arrives faster — instant flashes feel like jank.
-- The placeholder must convey "something is coming here", not "the plugin is broken".
+## i18n, dates and numbers
 
-### Empty / not-applicable state
-
-- Keep the header visible.
-- Replace the hero+supporting area with a centered, muted message explaining why there's nothing to show (in user language, not technical).
-- No icon-soup or illustration for tiny plugins; a single calm sentence is enough.
-
-### Error state
-
-- Keep the header visible. Use a warm tint (`#b45309` ink, optional `#fef3c7` surface) so it's visually distinct from `not-applicable`.
-- Short message + a retry call-to-action styled as a text-link (`Accent` color, underlined). The retry button must re-run the failed step, not full-reload the iframe.
-
-### Motion & polish
-
-- Transition state changes (`loading` → `ready`) with a 120–200 ms opacity / translateY fade. Avoid layout jumps.
-- Hover states on every interactive element. Focus rings via `:focus-visible` for keyboard users.
-- Respect `prefers-reduced-motion`: gate the shimmer and state transitions behind the media query so motion-sensitive users get a static rendering.
-
-## i18n & number formatting
-
-Default to Polish, offer English:
+User-facing copy is **Polish first, English fallback**. Take the language and formats from the viewer's Livespace preferences **when Livespace sends them** — not every Livespace does yet — and fall back to the browser otherwise:
 
 ```js
-const LANG = (navigator.language || 'pl').toLowerCase().startsWith('en') ? 'en' : 'pl';
+let LANG = (navigator.language || "pl").toLowerCase().startsWith("en") ? "en" : "pl"
+
+LsPlugin.on("preferences", (p) => {
+  if (p?.language) LANG = p.language.toLowerCase().startsWith("en") ? "en" : "pl"
+  render()
+})
 ```
 
-Use a small `const I18N = { pl, en }` map plus a `t(key)` function — vue-i18n / i18next are overkill for tiny plugins.
-
-Format numbers via `Intl.NumberFormat(LANG === 'pl' ? 'pl-PL' : 'en-US', …)`. When laying out lines with mixed bound and literal text, use CSS-driven spacing (flex `column-gap`) — template compilers strip leading/trailing whitespace inside elements.
+- Don't wait for preferences before rendering: an older Livespace never sends them, and any field inside may be `null`. Render with defaults, re-render on the event.
+- `preferences.timeZone` and `preferences.formats` (date/time patterns, first day of week, number separators, currency symbol position) let dates and amounts read exactly as they do in Livespace. Use them when present; otherwise `Intl.NumberFormat` / `Intl.DateTimeFormat` with `pl-PL` or `en-US`.
+- A small `const I18N = { pl, en }` map plus `t(key)` is enough; i18n libraries are overkill for a plugin.

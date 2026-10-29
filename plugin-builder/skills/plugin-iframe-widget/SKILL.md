@@ -1,12 +1,30 @@
 ---
 name: plugin-iframe-widget
-version: "1.1"
-description: Use when building an iframe-widget Livespace plugin — after the `plugin-builder` router selected the iframe-widget type. A pure client-side app embedded as an `<iframe>` inside a deal or company profile, receiving entity context (and optionally Livespace API credentials) via postMessage. For plugins that must keep third-party secrets server-side, see the `plugin-iframe-widget-backend` sub-skill.
+version: "2.0"
+description: Use when building an iframe-widget Livespace plugin — after the `plugin-builder` router selected the iframe-widget type. A web page embedded as an `<iframe>` in a deal, company, person or space profile (or opened from the apps menu), built on the Livespace plugin SDK (`LsPlugin`, protocol v2) — rich record context, admin settings forms, host toasts, fullscreen and dialog layouts, design tokens. For plugins that must keep third-party secrets server-side, see the `plugin-iframe-widget-backend` sub-skill.
 ---
 
 # Livespace iframe-widget plugin — builder recipe
 
-A Livespace **iframe widget** is a **pure client-side app** (HTML/CSS/JS) loaded as an `<iframe>` inside a Livespace profile — **Deal, Company, Person, or Space**. It is served over **HTTPS** from a **Livespace-allowlisted domain** (Livespace-hosted origins are auto-approved; external domains need manual approval — see Security caveats). No backend assumption beyond the static asset server. Communication with the host happens exclusively through `window.postMessage`. An account administrator registers the plugin (name + URL) and configures which profile types show it, where, its size, and who can see it.
+A Livespace **iframe widget** is a web page loaded as an `<iframe>` inside a Livespace profile — **Deal, Company, Person or Space** — or opened from the **apps menu**, where there is no record. It is served over **HTTPS** from a domain on the account's plugin whitelist, never from the Livespace origin itself. It talks to the host only through `window.postMessage`, normally via the **Livespace plugin SDK** — one script tag, no dependencies, the `LsPlugin` global.
+
+## Step 0 — read the published SDK docs
+
+Livespace publishes the SDK documentation with every SDK release, and **it is authoritative** — the reference files in this skill are summaries that defer to it. Before designing, fetch the overview, then the page for each step as you reach it:
+
+| Page | Covers |
+|---|---|
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/index.md> | Modes, the rules that bite |
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/getting-started.md> | Loading the SDK, `ready`, reacting to changes |
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/api-reference.md> | Every `LsPlugin` method, event and error code |
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/objects.md> | What a deal / company / person / space carries |
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/config-forms.md> | Admin settings forms |
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/styling.md> | Design tokens |
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/protocol.md> | Raw messages, sandbox |
+
+The same content is in one file at <https://plugin-sdk.feature.livespace.dev/v1/llms.txt> (~65 KB — too large to read reliably in one fetch; use the pages). If something below disagrees with them, follow the SDK docs and say so.
+
+Anything `llms.txt` marks **Preview** (today: the backend session token and secret config fields) depends on Livespace services that are not live. Don't build on it; mention it as a future option where relevant.
 
 ## Prerequisites
 
@@ -14,105 +32,161 @@ Reach this skill **after the `plugin-builder` router captured the plugin's purpo
 
 ## Build flow
 
-### Question 1 — API access?
+### Question 1 — where does it live?
 
-Ask whether the plugin needs to call the Livespace API at all (header `API access`):
+Header `Where`:
 
-- **Static plugin (no API access)** — renders only from the postMessage `context` payload (`deal`/`company` id + name, `user` id). Skips the credential handshake entirely. Examples: an informational badge, a link to an external system, a form posting to a non-Livespace endpoint.
-- **API-backed plugin** — fetches deal / company / user / product data from Livespace. Requires the full credential handshake. See [livespace-api.md](livespace-api.md).
+- **On a record** (deal / company / person / space) — the plugin is about the record being viewed. Ask which record types; they become `supportedContextTypes`.
+- **Apps menu** — a standalone tool with no record (a dashboard, a calculator, a search). It must declare **no** context requirements (`supportedContextTypes: null`), and its `context` carries only the viewer.
 
-A static plugin is materially simpler: no credential request, no pending-request Map, no timeout handling, no `apiBaseUrl` plumbing. Only opt into the API branch when the plugin actually needs server-fetched data.
+### Question 2 — what data does it need?
 
-### Question 2 — secrets server-side?
+Header `Data`:
 
-Ask whether the plugin must call a **third-party service** (JIRA, Linear, internal HR system, …) whose credentials must never reach the iframe (header `Backend`):
+- **The record only** — in protocol v2 the `context` already carries the record's full description (owners, groups, custom fields, and per type e.g. a deal's stage, status, value, probability, dates, contact and company) and is re-sent whenever the record changes. **No API call, no credentials.** Prefer this whenever it is enough.
+- **More Livespace data** — other records, lists, search, writes → `LsPlugin.api.call(...)`. See [livespace-api.md](livespace-api.md).
+- **Nothing from Livespace** — a link out, a form posting elsewhere, static content.
 
-- **Client-only** — everything runs in the iframe; hostable from any static origin. Continue here.
-- **Backend-enabled** → **invoke `plugin-iframe-widget-backend`** before scaffolding. The frontend half (this skill) still fully applies; the backend skill adds the server, layout, and deployment story.
+### Question 3 — admin settings?
 
-A backend is a real operational cost (deploy target, env vars, secret rotation, monitoring). Don't take it for a plugin that only needs a public API or only consumes Livespace data via the regular handshake — push for client-only first.
+Header `Settings`: does an administrator need to set anything per account (an account id, a region, a default view, a toggle)?
+
+- **Yes** → declare a **configuration form** with `LsPlugin.createConfigForm()`; Livespace renders, validates and stores it, and the plugin receives the values as `config`. No settings UI to build. See [config-forms.md](config-forms.md).
+- **No** → nothing to declare; the SDK still answers Livespace's settings request with an empty form.
+
+Config values are **not secret** — anyone who can open the plugin's settings can read them. A token or API key is never a config field; it means Question 4 is "backend".
+
+### Question 4 — secrets server-side?
+
+Header `Backend`: must the plugin call a **third-party service** (JIRA, Linear, an internal HR system, …) whose credentials must never reach the browser?
+
+- **Client-only** — everything runs in the iframe; any static HTTPS host on the whitelist. Continue here.
+- **Backend-enabled** → **invoke `plugin-iframe-widget-backend`** before scaffolding. Everything in this skill still applies to the frontend half.
+
+A backend is a real operational cost (deploy target, env vars, secret rotation, monitoring). Push for client-only first.
 
 ## Project layout
 
-Generic client-side app. Kebab-case, English file names.
+Kebab-case, English file names.
 
 ```
 <project>/
-├── index.html        # entry point + plugin shell
+├── index.html        # entry point: SDK <script> + tokens <link> in <head>
 ├── assets/           # optional: JS modules, CSS, JSON data, images
-│   ├── plugin.js
-│   ├── plugin.css
-│   └── data.json
 ├── docs/architecture/c4-context.mmd   # host ↔ iframe ↔ (API) — required: a plugin is a separate deployable
 ├── README.md
 └── CLAUDE.md
 ```
 
-A plugin is a separate deployable, so capture its boundary as a C4 **context** diagram at `docs/architecture/c4-context.mmd` before building. Keep it to a single level of detail — three actors and the relationships between them:
+A plugin is a separate deployable, so capture its boundary as a C4 **context** diagram at `docs/architecture/c4-context.mmd` before building: the **Livespace host page**, **this plugin**, and the **Livespace API** (only if the plugin calls it). Show `postMessage` between host and iframe and HTTPS between iframe and API. The backend variant adds a **container** diagram — see `plugin-iframe-widget-backend`.
 
-- the **Livespace host page** (the profile embedding the plugin),
-- **this plugin** (the iframe), and
-- the **Livespace API** (only if the plugin is API-backed).
+A single `index.html` (inline JS + CSS, vanilla or a CDN framework) suits small plugins. Split into `assets/*` once logic, state or data grows.
 
-Show `postMessage` between host and iframe, and HTTPS between iframe and API. When the backend variant is chosen, add a **container** diagram (`c4-container.mmd`) — see `plugin-iframe-widget-backend`.
+## Skeleton
 
-Single-file `index.html` (inline JS+CSS, Vue 3 CDN or vanilla) suits tiny plugins. Split into `assets/*` modules once logic, state, or data grows.
+Load the SDK and the tokens in `<head>` — the SDK sends `ready` as soon as it runs, and Livespace sends nothing until it hears it:
 
-## postMessage at a glance
+```html
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://plugin-sdk.feature.livespace.dev/v1/ls-plugin.js"></script>
+    <link rel="stylesheet" href="https://plugin-sdk.feature.livespace.dev/v1/ls-tokens.css" />
+  </head>
+  <body>
+    <main id="app"></main>
+    <script>
+      LsPlugin.declareMetadata({ supportedContextTypes: ["deal"], minWidthPx: 260 })
+      LsPlugin.createConfigForm()                      // only if Question 3 was "yes"
+        .addTextInput("accountId", "ID konta", { required: true })
 
-Three message types under the `livespace-plugin:` namespace; the plugin is the iframe, the host is `window.parent`:
+      LsPlugin.on("mode", (mode) => { if (mode === "config") return; boot(mode) })
+      LsPlugin.on("context", ({ deal }) => renderDeal(deal))
+      LsPlugin.on("config", (config) => applyConfig(config))
+      LsPlugin.on("preferences", () => rerender())
+    </script>
+  </body>
+</html>
+```
 
-1. `livespace-plugin:context` (host → iframe) — the record's context: exactly one of `deal` / `company` / `person` / `space` (whichever profile embeds the iframe) + `user.id` (always present, the only source of the logged-in user identity). **`person` carries `firstName`/`lastName`, not a single `name`.**
-2. `livespace-plugin:request-api-credentials` (iframe → host) — API-backed only; one per call, correlated by a generated `requestId`.
-3. `livespace-plugin:api-credentials` (host → iframe) — the reply, echoing `requestId`.
+`ls-plugin.mjs` is the ES-module build for bundlers. `v1` follows fixes and backwards-compatible additions; pin an exact version (`…/1.2.0/ls-plugin.js`) only when you must freeze.
 
-Outbound uses target origin `'*'`; Livespace validates the iframe's origin against its domain allowlist on its side, so the plugin needs no outbound origin check — but **must validate `event.data.type`** on every inbound message before acting. **Full envelope, TypeScript shapes, the profile→fields table, validation, and correlation rules: [postmessage-contract.md](postmessage-contract.md).** Never invent new message types without host coordination.
+**Without the SDK** (rare — e.g. a page you don't control), implement the raw protocol from [postmessage-contract.md](postmessage-contract.md): validate the host origin, send `ready` with `protocolVersion: 2`, then follow the mode.
 
-## State machine
+## Modes and states
 
-Distinguish at minimum these four states; never show a blank iframe (it looks broken):
+Livespace loads the page in one of three **modes**, announced before anything else:
 
-1. `loading` — fetches in flight. Show a skeleton, not a spinner.
+| Mode | What to do |
+|---|---|
+| `view` | The real thing: render from `context` and `config`, and re-render on every `context` / `config` event — a plugin that reads them once goes stale. |
+| `preview` | An admin is configuring the plugin. `context` is `null`; `config` is re-sent on every keystroke. Render the real layout with **sample data** and the live config. Don't call the API. |
+| `config` | Livespace wants the settings form. Nothing drawn is shown — answer (the SDK does, from `createConfigForm()`) and skip rendering. |
+
+Within `view`, distinguish at least these states; never show a blank iframe (it looks broken):
+
+1. `loading` — data in flight. A skeleton, not a spinner.
 2. `ready` (or a domain equivalent like `eligible`) — main render.
-3. `not-applicable` — context arrived but nothing to show (e.g. user not authorized). Render a polite placeholder.
-4. `error` — fetch / parse / API failure. Show a message **and** a retry CTA that re-runs the failed step (not a full iframe reload).
+3. `not-configured` — `config === null`: nobody has set the plugin up. Say an administrator needs to configure it. (`{}` is configured-but-blank — not this state.)
+4. `not-applicable` — context arrived but there is nothing to show (e.g. the user is not eligible). A polite placeholder.
+5. `error` — fetch / parse / API failure. A message **and** a retry CTA that re-runs the failed step, not a full iframe reload.
 
-Styling for each state — skeleton, empty, error, motion — is in [ui-design.md](ui-design.md).
+Styling for each state, motion and toasts: [ui-design.md](ui-design.md).
 
-## UI & i18n
+## What the host gives you
 
-Make it feel like a polished component, not a debug page: a persistent header label, one hero value, a supporting metadata row, three width breakpoints, and the shared visual palette. User-facing copy is **Polish first, English fallback**. **Full design reference — breakpoints, palette, anatomy, state styling, number formatting: [ui-design.md](ui-design.md).**
+| Capability | SDK | Reference |
+|---|---|---|
+| The viewed record, full description, live updates | `on("context")`, `LsPlugin.context` | [postmessage-contract.md § Objects](postmessage-contract.md#objects) |
+| Admin settings, rendered and stored by Livespace | `createConfigForm()`, `on("config")` | [config-forms.md](config-forms.md) |
+| The Livespace API as the viewing user | `api.call()`, `api.deal.get()`, `api.credentials()` | [livespace-api.md](livespace-api.md) |
+| A toast in the Livespace chrome | `notify({ title, body?, variant? })` | [ui-design.md](ui-design.md) |
+| Fullscreen (admin-enabled, Livespace-driven) | `on("fullscreen")`, `isFullscreen` | [ui-design.md § Fullscreen](ui-design.md#fullscreen-and-the-dialog-layout) |
+| Dialog layout bounds | `setModalSize({...})` | [ui-design.md § Fullscreen](ui-design.md#fullscreen-and-the-dialog-layout) |
+| Where it can be placed, minimum size | `declareMetadata({...})` | [postmessage-contract.md § Placement](postmessage-contract.md#placement-metadata) |
+| Viewer's language, time zone, formats (when Livespace sends them) | `on("preferences")`, `LsPlugin.preferences` | [ui-design.md § i18n](ui-design.md#i18n-dates-and-numbers) |
+| Livespace look and feel | `ls-tokens.css` / `ls-theme.css` | [ui-design.md § Design tokens](ui-design.md#design-tokens) |
+
+Never invent a message type or an SDK method — the host ignores what it does not know.
 
 ## Security caveats
 
 ### Platform constraints (Livespace-enforced)
 
-- **HTTPS only.** Plain-HTTP plugin URLs are rejected at registration.
-- **Domain allowlist.** A plugin URL is accepted only if its domain is on Livespace's allowlist — the primary security boundary. Livespace-hosted origins are auto-approved; **external domains need manual approval** (contact Livespace support with the domain, a short app description, and the account name; ~a few business days). "Host it anywhere" is wrong — confirm the domain is allowlisted before promising a deploy target.
-- **Iframe `sandbox`.** Livespace loads every plugin in a sandboxed iframe with a **fixed** capability set — `allow-scripts`, `allow-same-origin`, `allow-forms`, `allow-popups`, `allow-downloads` — identical for every plugin and not configurable per plugin. So scripts, same-origin storage, form submission, popups (e.g. a "shortcut" plugin opening an external tool in a new tab), and downloads all work; anything outside that set — notably top-level navigation of the host — does not. Design within these capabilities. Full details: <https://plugin.docs.livespace.io/security/>.
-- **Inbound validation.** Always validate `event.data.type` before acting on a message. Livespace already drops messages from non-allowlisted origins on its side.
+- **HTTPS only**, and the host must be on the account's **plugin whitelist**: `*.livespace.dev` is on it for every account; any other domain is added per account by Livespace support. Confirm the domain before promising a deploy target.
+- **Never the Livespace origin.** A plugin served from the host's own origin would defeat the sandbox, so Livespace refuses to render it.
+- **Iframe `sandbox`:** `allow-scripts allow-same-origin allow-forms allow-popups allow-downloads`, the same for every plugin. Scripts, own-origin cookies and storage, forms, popups (open an external tool in a new tab) and downloads work; top-level navigation of Livespace does not. Microphone may be requested (the browser prompts). Denied outright: camera, geolocation, payment, USB, MIDI, display capture, the native Fullscreen API, autoplay, motion sensors, clipboard read. `referrerPolicy` is `no-referrer`, so your server sees no `Referer`.
+- **Origin validation.** Livespace checks your origin; the plugin checks the host's — the SDK does this for you. Hand-rolled code must drop inbound messages from any other origin and never post to `'*'`.
+
+Full and current: <https://plugin-sdk.feature.livespace.dev/v1/docs/protocol.md> (Sandbox section).
 
 ### Data exposure (always disclose in README)
 
-- Credentials arrive in the iframe and are reachable from JS / DevTools.
-- Any data the plugin fetches (e.g. a static config JSON) is reachable from the network panel.
-- Production-grade plugins that need to keep data confidential must move sensitive logic behind a backend that returns only rendered results. This skill scaffolds client-only plugins; if the plugin needs server-side secrets, use `plugin-iframe-widget-backend` and flag the gap in the project README.
+- API credentials arrive in the iframe and are reachable from JS / DevTools.
+- Config values are readable by anyone who can open the plugin's settings, and travel in a `postMessage`.
+- Anything the plugin fetches (a static config JSON, an API response) is visible in the network panel.
+- Data that must stay confidential needs a backend that returns only rendered results — `plugin-iframe-widget-backend`.
 
 ## Naming & language
 
-- Project & file names, code identifiers: English, kebab-case.
-- User-facing copy: Polish first, English fallback.
-- Message types: keep the `livespace-plugin:` prefix and dash-case.
+- Project and file names, code identifiers: English, kebab-case.
+- User-facing copy: Polish first, English fallback — or the viewer's Livespace language when `preferences` provides it.
 
 ## Verification
 
-Exercise the plugin from the bundled host harness — [examples/host-harness.html](examples/host-harness.html) — which embeds the plugin, sends `context`, and answers credential requests (no real Livespace needed). Serve both over http (e.g. `npx serve .`) and point the harness at your plugin URL. Confirm:
+Exercise the plugin from the bundled host harness — [examples/host-harness.html](examples/host-harness.html). It plays the Livespace side of protocol v2: waits for `ready`, sends `mode`, then `context` / `config` / `preferences`, answers credential requests (or fails them on demand), asks for the config form and renders it, toggles fullscreen, and logs `notify`, `metadata` and `modal-size`. Serve the harness and the plugin from **two different ports** — different origins, as in production — and point the harness at the plugin URL. Confirm:
 
-1. Sending `livespace-plugin:context` transitions the plugin out of `loading` into the correct end state.
-2. (API-backed) Two parallel API calls succeed simultaneously — proves the one-shot credential handshake works under concurrency.
-3. Missing context fields or a bad id triggers `not-applicable` or `error`, with the retry CTA working.
-4. PL/EN switch produces the right strings (toggle browser locale).
-5. RWD is visually correct at each breakpoint width — use the harness's 200 / 320 / 480 px presets.
+1. **`view`:** `ready` arrives within a second of load; the plugin leaves `loading` for the right end state. Editing the sample record and re-sending `context` updates the plugin without a reload.
+2. **`preview`:** the plugin renders sample data, never calls the API, and follows config edits live.
+3. **`config`:** the plugin answers with its form (or `fields: []`), and `metadata` arrives just before it.
+4. **Config states:** `null` shows the not-configured state; `{}` does not.
+5. **(API-backed)** Two parallel calls both succeed; a credential error from the harness lands in the `error` state with a working retry.
+6. **Fullscreen** toggles the plugin's layout; **notify** shows up in the harness log with the right variant.
+7. **PL/EN:** the plugin renders with its defaults when preferences are never sent (the harness default), and switches language when the harness sends Polish or English preferences.
+8. **Layout** is correct at each harness width/height preset, and at the minimums the plugin declares.
+9. Opened **directly** in a browser tab (nothing embedding it), the plugin renders its empty state without throwing.
 
 ## Reference files
 
@@ -120,7 +194,9 @@ Loaded on demand — read the one relevant to the step you're on:
 
 | File | Read it when |
 |---|---|
-| [postmessage-contract.md](postmessage-contract.md) | Implementing or debugging the host↔iframe handshake (envelope, message shapes, correlation). |
-| [livespace-api.md](livespace-api.md) | The plugin is API-backed — calling Livespace, one-shot sessions, endpoint reference. |
-| [ui-design.md](ui-design.md) | Laying out or styling the plugin — breakpoints, palette, anatomy, state styling, i18n. |
-| [examples/host-harness.html](examples/host-harness.html) | Verifying locally — a runnable host that drives the postMessage contract. |
+| <https://plugin-sdk.feature.livespace.dev/v1/docs/index.md> and the pages in Step 0 | Always, first — the authoritative SDK docs. |
+| [postmessage-contract.md](postmessage-contract.md) | Implementing without the SDK, or debugging the messages; record fields; placement metadata. |
+| [livespace-api.md](livespace-api.md) | The plugin calls the Livespace API — `api.call`, error codes, one-shot credentials. |
+| [config-forms.md](config-forms.md) | The plugin has admin settings. |
+| [ui-design.md](ui-design.md) | Layout, tokens, sizes, fullscreen/dialog, states, toasts, i18n. |
+| [examples/host-harness.html](examples/host-harness.html) | Verifying locally — a runnable host for protocol v2. |

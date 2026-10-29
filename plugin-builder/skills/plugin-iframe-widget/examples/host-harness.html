@@ -5,160 +5,392 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Livespace plugin — local host harness</title>
   <!--
-    Local test host for a Livespace iframe-widget plugin.
+    Local test host for a Livespace iframe-widget plugin, protocol version 2.
 
-    It impersonates the Livespace host: it embeds your plugin in an <iframe>, sends a
-    `livespace-plugin:context` message, and answers `livespace-plugin:request-api-credentials`
-    with the credentials you type below — so you can exercise the full postMessage contract
-    WITHOUT a real Livespace instance.
+    It plays the Livespace side of the postMessage contract (see postmessage-contract.md):
+    embeds your plugin with the production sandbox, waits for `ready`, sends `mode` first,
+    then `preferences` / `context` / `config` for that mode; answers credential requests
+    (or fails them on demand); asks for the config form in `config` mode and renders it;
+    toggles fullscreen; shows `notify` toasts and logs `metadata` and `modal-size`.
+    No real Livespace needed.
 
     Usage:
-      1. Serve your plugin and this file over http (e.g. `npx serve .` from the project root),
-         or just open this file and point "Plugin URL" at your served plugin.
-      2. Pick the profile (deal / company / person / space), fill in the entity + user id. Add API credentials if the plugin is API-backed.
-      3. Click "Load / reload plugin", then "Send context".
-      4. Watch the message log; resize via the width/height presets to test breakpoints.
+      1. Serve your plugin and this file from two different ports, so they are different
+         origins as in production — e.g. `npx serve -l 3000 .` in the plugin project and
+         `npx serve -l 5050 .` next to this file.
+      2. Open http://localhost:5050/host-harness.html, set "Plugin URL", pick a mode, click "Load".
+      3. Edit the record / config JSON and click "Send context" / "Send config" to simulate
+         an edit on the record or in the settings form.
 
-    There is no auth and no origin check here — it mirrors the baseline contract (see postmessage-contract.md).
+    Firefox has no `location.ancestorOrigins`, and the iframe uses `referrerpolicy="no-referrer"`
+    like Livespace does, so the SDK cannot find the host origin there. Use a Chromium browser,
+    or add `data-host-origin="http://localhost:5050"` to the SDK <script> tag while testing.
   -->
   <style>
-    :root { font: 14px/1.5 system-ui, sans-serif; color: #1a1a2e; }
-    body { margin: 0; display: grid; grid-template-columns: 360px 1fr; height: 100vh; }
-    .panel { padding: 16px; overflow-y: auto; border-right: 1px solid #e5e7eb; background: #f0f4f8; }
-    .stage { padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-    h1 { font-size: 15px; margin: 0 0 12px; }
-    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #9ca3af; margin: 18px 0 6px; }
-    label { display: block; font-size: 12px; color: #6b7280; margin: 8px 0 2px; }
-    input, select { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; }
-    button { padding: 7px 12px; border: 0; border-radius: 6px; background: #3b82f6; color: #fff; font: inherit; cursor: pointer; }
-    button.secondary { background: #fff; color: #1a1a2e; border: 1px solid #d1d5db; }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
-    iframe { border: 1px solid #d1d5db; border-radius: 8px; background: #fff; }
-    #log { flex: 1; margin: 0; padding: 10px; background: #1a1a2e; color: #d1fae5; border-radius: 8px;
-           font: 12px/1.45 ui-monospace, monospace; overflow: auto; white-space: pre-wrap; }
+    :root { font: 13px/1.45 system-ui, sans-serif; color: #1f2937; }
+    body { margin: 0; display: grid; grid-template-columns: 380px 1fr; height: 100vh; }
+    .panel { padding: 14px 16px; overflow-y: auto; border-right: 1px solid #e5e7eb; background: #f6f7f9; }
+    .stage { position: relative; padding: 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; overflow: auto; }
+    h1 { font-size: 15px; margin: 0 0 8px; }
+    h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #6b7280; margin: 16px 0 4px; }
+    label { display: block; font-size: 12px; color: #4b5563; margin: 6px 0 2px; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 5px 7px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; background: #fff; }
+    textarea { font: 11.5px/1.4 ui-monospace, monospace; resize: vertical; }
+    button { padding: 6px 10px; border: 0; border-radius: 6px; background: #6d28d9; color: #fff; font: inherit; cursor: pointer; }
+    button.secondary { background: #fff; color: #1f2937; border: 1px solid #d1d5db; }
+    .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+    .row > input, .row > select { flex: 1; width: auto; }
+    .status { font-size: 12px; color: #374151; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 8px; margin-top: 8px; white-space: pre-wrap; }
+    .frame-box { position: relative; }
+    .frame-box.fullscreen { position: absolute; inset: 16px 16px auto 16px; bottom: 16px; z-index: 5; background: #fff; border: 1px solid #d1d5db; border-radius: 8px; display: flex; flex-direction: column; }
+    .fs-toolbar { display: none; height: 32px; align-items: center; gap: 8px; padding: 0 8px; border-bottom: 1px solid #e5e7eb; font-size: 12px; }
+    .frame-box.fullscreen .fs-toolbar { display: flex; }
+    .frame-box.fullscreen iframe { flex: 1; width: 100% !important; height: auto !important; border: 0; border-radius: 0 0 8px 8px; }
+    iframe { display: block; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; }
+    #form { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px; margin-top: 6px; }
+    #form .help { color: #6b7280; font-size: 11.5px; }
+    #form h3 { font-size: 12px; margin: 10px 0 2px; }
+    #log { flex: 1; min-height: 120px; margin: 0; padding: 10px; background: #111827; color: #d1fae5; border-radius: 8px;
+           font: 11.5px/1.45 ui-monospace, monospace; overflow: auto; white-space: pre-wrap; }
     .log-out { color: #93c5fd; } .log-in { color: #fcd34d; } .log-warn { color: #fca5a5; }
+    #toasts { position: absolute; right: 24px; bottom: 24px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
+    .toast { min-width: 220px; max-width: 320px; padding: 8px 10px; border-radius: 8px; background: #1f2937; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+    .toast b { display: block; } .toast.success { background: #047857; } .toast.warning { background: #b45309; } .toast.error { background: #b91c1c; }
   </style>
 </head>
 <body>
   <div class="panel">
-    <h1>Livespace plugin host harness</h1>
+    <h1>Livespace plugin host harness · protocol 2</h1>
 
     <label>Plugin URL (iframe src)</label>
     <input id="src" value="http://localhost:3000/index.html">
+    <label>Mode</label>
+    <select id="mode">
+      <option value="view">view — on a real profile</option>
+      <option value="preview">preview — admin configuring, no record</option>
+      <option value="config">config — Livespace asks for the settings form</option>
+    </select>
+    <div class="row"><button id="load">Load / reload plugin</button></div>
+    <div id="status" class="status">Not loaded.</div>
 
-    <h2>Context (embedding)</h2>
+    <h2>Record (view mode)</h2>
     <label>Embed as</label>
     <select id="embed">
       <option value="deal">Deal profile</option>
       <option value="company">Company profile</option>
       <option value="person">Person profile</option>
       <option value="space">Space profile</option>
+      <option value="none">Apps menu — no record</option>
     </select>
-    <label>Entity id (UUID)</label>
-    <input id="entityId" value="00000000-0000-0000-0000-000000000001">
-    <label>Name (deal / company / space)</label>
-    <input id="entityName" value="Acme Sp. z o.o.">
-    <label>Person first / last name (person profile only)</label>
-    <div class="row" style="margin-top:2px">
-      <input id="personFirst" value="Jan" style="flex:1">
-      <input id="personLast" value="Kowalski" style="flex:1">
-    </div>
-    <label>User id (UUID)</label>
-    <input id="userId" value="00000000-0000-0000-0000-0000000000aa">
+    <label>Record JSON (protocol 2 description)</label>
+    <textarea id="record" rows="12"></textarea>
+    <label>Viewer user id</label>
+    <input id="userId" value="00000000-0000-4000-8000-0000000000aa">
+    <div class="row"><button class="secondary" id="sendContext">Send context</button></div>
 
-    <h2>API credentials (API-backed plugins)</h2>
+    <h2>Config</h2>
+    <label>Stored config JSON (<code>null</code> = never configured)</label>
+    <textarea id="config" rows="3">null</textarea>
+    <div class="row"><button class="secondary" id="sendConfig">Send config</button></div>
+    <div id="form"><span class="help">The plugin's settings form appears here in config mode.</span></div>
+
+    <h2>Preferences</h2>
+    <select id="prefs">
+      <option value="omit">never sent — not every Livespace sends them yet</option>
+      <option value="pl">Polish viewer (pl, Europe/Warsaw)</option>
+      <option value="en">English viewer (en, Europe/London)</option>
+      <option value="null">null — Livespace has none</option>
+    </select>
+    <div class="row"><button class="secondary" id="sendPrefs">Send preferences</button></div>
+
+    <h2>API credentials</h2>
+    <label>Answer requests with</label>
+    <select id="credMode">
+      <option value="ok">credentials</option>
+      <option value="unauthenticated">error: unauthenticated</option>
+      <option value="forbidden">error: forbidden</option>
+      <option value="not_found">error: not_found</option>
+      <option value="conflict">error: conflict</option>
+      <option value="server_error">error: server_error</option>
+      <option value="silence">no answer (timeout)</option>
+    </select>
     <label>apiBaseUrl</label>
-    <input id="apiBaseUrl" value="https://acme.livespace.io">
-    <label>apiKey</label><input id="apiKey" value="dev-key">
-    <label>apiSha</label><input id="apiSha" value="dev-sha">
-    <label>apiSession (a fresh one is auto-generated per request if blank)</label>
-    <input id="apiSession" placeholder="leave blank to auto-generate">
+    <input id="apiBaseUrl" value="https://acme.livespace.example">
+    <div class="row"><input id="apiKey" value="dev-key" title="apiKey"><input id="apiSha" placeholder="apiSha (fresh per request if blank)" title="apiSha"></div>
 
+    <h2>Layout</h2>
     <div class="row">
-      <button id="load">Load / reload plugin</button>
-      <button id="ctx" class="secondary">Send context</button>
+      <button class="secondary" data-w="240" data-h="240">narrow 240×240</button>
+      <button class="secondary" data-w="320" data-h="380">320×380</button>
+      <button class="secondary" data-w="480" data-h="520">480×520</button>
     </div>
-
-    <h2>Iframe size (breakpoint test)</h2>
     <div class="row">
-      <button class="secondary" data-w="200" data-h="240">micro · S (200×240)</button>
-      <button class="secondary" data-w="320" data-h="380">default · M (320×380)</button>
-      <button class="secondary" data-w="480" data-h="540">wide · L (480×540)</button>
+      <input id="w" type="number" value="320" title="width px"><input id="h" type="number" value="380" title="height px">
+      <button class="secondary" id="applySize">Custom size</button>
     </div>
+    <div class="row"><button class="secondary" id="fullscreen">Enter fullscreen</button></div>
+    <div id="declared" class="status">metadata: — · modal-size: —</div>
   </div>
 
   <div class="stage">
-    <iframe id="frame" width="320" height="380" title="plugin under test"></iframe>
+    <div id="frameBox" class="frame-box">
+      <div class="fs-toolbar"><b id="fsName">Plugin</b><span id="fsOrigin" style="color:#6b7280"></span><span style="flex:1"></span><button class="secondary" id="fsExit">Exit</button></div>
+      <iframe id="frame" width="320" height="380" title="plugin under test"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
+        allow="microphone *; fullscreen 'none'; camera 'none'; geolocation 'none'; clipboard-read 'none'"
+        referrerpolicy="no-referrer"></iframe>
+    </div>
     <h2 style="margin:0">Message log</h2>
     <pre id="log"></pre>
+    <div id="toasts"></div>
   </div>
 
   <script>
-    const $ = (id) => document.getElementById(id);
-    const frame = $('frame');
-    const logEl = $('log');
-    const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
-      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-          const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-        }));
+    const $ = (id) => document.getElementById(id)
+    const frame = $("frame")
+    const logEl = $("log")
+    const P = "livespace-plugin:"
+    const uuid = () => crypto.randomUUID()
 
-    function log(dir, obj) {
-      const cls = dir === '→' ? 'log-out' : dir === '⚠' ? 'log-warn' : 'log-in';
-      const time = new Date().toISOString().slice(11, 23);
-      logEl.innerHTML += `<span class="${cls}">${time} ${dir} ${typeof obj === 'string' ? obj : JSON.stringify(obj)}</span>\n`;
-      logEl.scrollTop = logEl.scrollHeight;
+    const SAMPLES = {
+      deal: {
+        id: "00000000-0000-4000-8000-000000000001", name: "Wdrożenie CRM — Acme", version: 1, type: "deal",
+        createdAt: "2026-09-01T09:00:00+02:00", modifiedAt: "2026-10-20T14:30:00+02:00", lastActivityAt: "2026-10-27T11:05:00+01:00",
+        customId: null, owners: [{ type: "user", id: "00000000-0000-4000-8000-0000000000aa", name: "Jan Kowalski" }], groups: ["Sprzedaż"],
+        customFields: { "11111111-1111-4111-8111-111111111111": { name: "Branża", type: "select", value: "IT" } },
+        number: "D/2026/042", status: "open", stage: "Negocjacje", value: { amount: 48000, currency: "PLN" }, probability: 60,
+        startDate: "2026-09-01", endDate: "2026-12-15", source: "Polecenie",
+        contact: { name: "Anna Nowak", restricted: false }, company: { name: "Acme Sp. z o.o.", restricted: false },
+      },
+      company: {
+        id: "00000000-0000-4000-8000-000000000002", name: "Acme Sp. z o.o.", version: 1, type: "company",
+        createdAt: "2026-01-10T10:00:00+01:00", modifiedAt: "2026-10-01T08:15:00+02:00", lastActivityAt: null,
+        customId: "ACME-01", owners: [{ type: "team", id: "00000000-0000-4000-8000-0000000000bb", name: "Zespół Północ" }], groups: [],
+        customFields: {}, taxId: "0000000000", regon: null, website: "https://acme.example", clientStatus: "Klient", source: null,
+      },
+      person: {
+        id: "00000000-0000-4000-8000-000000000003", name: "Anna Nowak", version: 1, type: "person",
+        createdAt: "2026-03-05T12:00:00+01:00", modifiedAt: "2026-10-02T16:40:00+02:00", lastActivityAt: "2026-10-25T09:00:00+02:00",
+        customId: null, owners: [], groups: [], customFields: {},
+        firstName: "Anna", middleName: null, lastName: "Nowak", position: "CFO", source: null, company: { name: null, restricted: true },
+      },
+      space: {
+        id: "00000000-0000-4000-8000-000000000004", name: "Onboarding Acme", version: 1, type: "space",
+        createdAt: "2026-09-15T09:00:00+02:00", modifiedAt: "2026-10-18T13:00:00+02:00", lastActivityAt: null,
+        customId: null, owners: [], groups: [], customFields: {}, number: "S/2026/007", description: "Przestrzeń projektu wdrożenia.",
+      },
+    }
+    const PREFS = {
+      pl: { language: "pl", timeZone: "Europe/Warsaw", formats: { date: "dd.MM.yyyy", time: "HH:mm", dateTime: "dd.MM.yyyy HH:mm", firstDayOfWeek: 1,
+        number: { decimalSeparator: ",", thousandsSeparator: " ", decimalPlaces: 2 }, money: { currencySymbol: "zł", symbolPosition: "after", symbolSpacing: true } } },
+      en: { language: "en", timeZone: "Europe/London", formats: { date: "dd/MM/yyyy", time: "HH:mm", dateTime: "dd/MM/yyyy HH:mm", firstDayOfWeek: 1,
+        number: { decimalSeparator: ".", thousandsSeparator: ",", decimalPlaces: 2 }, money: { currencySymbol: "£", symbolPosition: "before", symbolSpacing: false } } },
     }
 
-    function post(msg) {
-      frame.contentWindow.postMessage(msg, '*');
-      log('→', msg);
+    let session = null
+
+    function log(dir, obj) {
+      const cls = dir === "→" ? "log-out" : dir === "⚠" ? "log-warn" : "log-in"
+      const time = new Date().toISOString().slice(11, 23)
+      const span = document.createElement("span")
+      span.className = cls
+      span.textContent = `${time} ${dir} ${typeof obj === "string" ? obj : JSON.stringify(obj)}\n`
+      logEl.append(span)
+      logEl.scrollTop = logEl.scrollHeight
+    }
+    const setStatus = (text) => { $("status").textContent = text }
+    const pluginOrigin = () => new URL($("src").value, location.href).origin
+
+    function post(type, payload) {
+      if (!session) return log("⚠", `not loaded — ${type} not sent`)
+      const msg = payload === undefined ? { type: P + type } : { type: P + type, payload }
+      frame.contentWindow.postMessage(msg, pluginOrigin())
+      log("→", msg)
+    }
+
+    function parseJson(id) {
+      try { return JSON.parse($(id).value) } catch (e) { log("⚠", `${id}: invalid JSON — ${e.message}`); return undefined }
     }
 
     function sendContext() {
-      const embed = $('embed').value;
-      const id = $('entityId').value;
-      // person carries firstName/lastName; the other profiles carry a single name
-      const entity = embed === 'person'
-        ? { id, firstName: $('personFirst').value, lastName: $('personLast').value }
-        : { id, name: $('entityName').value };
-      const payload = { user: { id: $('userId').value } };
-      payload[embed] = entity;
-      post({ type: 'livespace-plugin:context', payload });
+      if (!session) return
+      if (session.mode !== "view") return log("⚠", `context is sent in view mode only (now: ${session.mode})`)
+      const embed = $("embed").value
+      const user = { id: $("userId").value }
+      if (embed === "none") return post("context", { user })
+      const record = parseJson("record")
+      if (!record) return
+      const object = session.protocolVersion >= 2 ? record : { id: record.id, name: record.name }
+      post("context", { [embed]: object, user })
     }
 
-    $('load').onclick = () => { logEl.innerHTML = ''; frame.src = $('src').value; };
-    $('ctx').onclick = sendContext;
-    document.querySelectorAll('[data-w]').forEach(b => b.onclick = () => {
-      frame.width = b.dataset.w; frame.height = b.dataset.h;
-    });
+    function sendConfig() {
+      const config = parseJson("config")
+      if (config !== undefined && session?.mode !== "config") post("config", { config })
+    }
 
-    // Reply to the iframe's credential requests, echoing the requestId (the correlation key).
-    window.addEventListener('message', (event) => {
-      let data;
-      try { data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; }
-      catch { return; }
-      if (!data || !data.type || !String(data.type).startsWith('livespace-plugin:')) return;
-      log('←', data);
+    function sendPrefs() {
+      const v = $("prefs").value
+      if (v === "omit") return log("⚠", "preferences: not sent (pick a language to send them)")
+      post("preferences", { preferences: v === "null" ? null : PREFS[v] })
+    }
 
-      if (data.type === 'livespace-plugin:request-api-credentials') {
-        const requestId = data.payload && data.payload.requestId;
-        if (!requestId) { log('⚠', 'request-api-credentials had no requestId'); return; }
-        post({
-          type: 'livespace-plugin:api-credentials',
-          payload: {
-            requestId,
-            apiBaseUrl: $('apiBaseUrl').value,
-            apiKey: $('apiKey').value,
-            apiSha: $('apiSha').value,
-            apiSession: $('apiSession').value || uuid(),
-          }
-        });
+    function startSession(protocolVersion) {
+      session.protocolVersion = protocolVersion
+      session.mode = $("mode").value
+      setStatus(`protocol ${protocolVersion} · mode ${session.mode}`)
+      post("mode", { mode: session.mode })
+      if (protocolVersion >= 2) sendPrefs()
+      if (session.mode === "config") { post("request-config-form"); return }
+      if (session.mode === "view") sendContext()
+      sendConfig()
+    }
+
+    function load() {
+      logEl.textContent = ""
+      $("form").innerHTML = '<span class="help">Waiting for the plugin\'s settings form…</span>'
+      exitFullscreen(false)
+      session = { started: false, protocolVersion: null, mode: null, lastToast: 0 }
+      setStatus("Loading — waiting for ready…")
+      frame.src = $("src").value
+    }
+
+    frame.addEventListener("load", () => {
+      if (!session || session.started) return
+      setTimeout(() => {
+        if (!session || session.started) return
+        session.started = true
+        log("⚠", "no ready within 1 s of load — treating the plugin as protocol 1")
+        startSession(1)
+      }, 1000)
+    })
+
+    function renderForm(fields) {
+      const box = $("form")
+      box.innerHTML = ""
+      if (!fields.length) { box.innerHTML = '<span class="help">The plugin declares no settings.</span>'; return }
+      for (const f of fields) {
+        if (f.kind === "section") { const h = document.createElement("h3"); h.textContent = f.title; box.append(h); if (f.description) { const d = document.createElement("div"); d.className = "help"; d.textContent = f.description; box.append(d) } continue }
+        if (f.kind === "helpText") { const d = document.createElement("div"); d.className = "help"; d.textContent = f.text; box.append(d); continue }
+        const label = document.createElement("label")
+        label.textContent = f.label + (f.required ? " *" : "")
+        let input
+        if (f.kind === "select") {
+          input = document.createElement("select")
+          for (const o of f.options ?? []) { const opt = document.createElement("option"); opt.value = o.value; opt.textContent = o.label; input.append(opt) }
+          if (f.default !== undefined) input.value = f.default
+        } else if (f.kind === "textarea") {
+          input = document.createElement("textarea"); input.rows = 2; input.value = f.default ?? ""
+        } else {
+          input = document.createElement("input")
+          input.type = f.kind === "number" ? "number" : f.kind === "checkbox" ? "checkbox" : "text"
+          if (f.kind === "checkbox") { input.checked = !!f.default; input.style.width = "auto" } else input.value = f.default ?? ""
+          if (f.placeholder) input.placeholder = f.placeholder
+        }
+        input.dataset.key = f.key
+        input.dataset.kind = f.kind
+        box.append(label, input)
+        if (f.helpText) { const d = document.createElement("div"); d.className = "help"; d.textContent = f.helpText; box.append(d) }
       }
-    });
+      const save = document.createElement("button")
+      save.textContent = "Save as stored config"
+      save.style.marginTop = "8px"
+      save.onclick = () => {
+        const config = {}
+        for (const el of box.querySelectorAll("[data-key]")) {
+          const v = el.dataset.kind === "checkbox" ? el.checked : el.dataset.kind === "number" ? (el.value === "" ? null : Number(el.value)) : el.value
+          if (v !== "" && v !== null) config[el.dataset.key] = v
+        }
+        $("config").value = JSON.stringify(config, null, 2)
+        log("⚠", "config saved — reload in view or preview mode to deliver it")
+      }
+      box.append(save)
+    }
 
-    // Auto-send context shortly after the plugin loads, so a fresh open already shows the ready state.
-    frame.addEventListener('load', () => setTimeout(sendContext, 200));
-    frame.src = $('src').value;
+    function toast({ title, body, variant }) {
+      const now = Date.now()
+      if (now - session.lastToast < 1000) return log("⚠", "notify dropped — more than one per second")
+      session.lastToast = now
+      const el = document.createElement("div")
+      el.className = `toast ${["success", "warning", "error"].includes(variant) ? variant : ""}`
+      const b = document.createElement("b"); b.textContent = String(title ?? "").slice(0, 120); el.append(b)
+      if (body) el.append(String(body).slice(0, 300))
+      $("toasts").append(el)
+      setTimeout(() => el.remove(), 5000)
+    }
+
+    const declared = { metadata: "—", modalSize: "—" }
+    const showDeclared = () => { $("declared").textContent = `metadata: ${declared.metadata}\nmodal-size: ${declared.modalSize}` }
+
+    function answerCredentials(requestId) {
+      if (!requestId) return log("⚠", "request-api-credentials without a requestId — ignored")
+      if (session.mode !== "view") return log("⚠", `credentials are answered in view mode only (now: ${session.mode})`)
+      const m = $("credMode").value
+      if (m === "silence") return log("⚠", "credentials: not answering (the plugin should time out)")
+      if (m !== "ok") return post("api-credentials", { requestId, error: m })
+      post("api-credentials", {
+        requestId, apiBaseUrl: $("apiBaseUrl").value, apiKey: $("apiKey").value,
+        apiSha: $("apiSha").value || uuid(), apiSession: uuid(),
+      })
+    }
+
+    window.addEventListener("message", (e) => {
+      if (!session || e.source !== frame.contentWindow) return
+      if (e.origin !== pluginOrigin()) return log("⚠", `message from unexpected origin ${e.origin} — dropped`)
+      const data = e.data
+      if (!data || typeof data.type !== "string" || !data.type.startsWith(P)) return
+      log("←", data)
+      const type = data.type.slice(P.length)
+      const payload = data.payload ?? {}
+      switch (type) {
+        case "ready":
+          if (session.started && session.protocolVersion >= 2) return
+          session.started = true
+          startSession(Math.min(Number(payload.protocolVersion) || 1, 2))
+          break
+        case "request-api-credentials": answerCredentials(payload.requestId); break
+        case "config-form":
+          if (session.mode !== "config") return log("⚠", "config-form outside config mode — ignored")
+          renderForm(Array.isArray(payload.fields) ? payload.fields.slice(0, 50) : [])
+          break
+        case "metadata": declared.metadata = JSON.stringify(payload); showDeclared(); break
+        case "modal-size": declared.modalSize = JSON.stringify(payload); showDeclared(); break
+        case "notify": toast(payload); break
+        case "request-fullscreen":
+        case "request-exit-fullscreen":
+          log("⚠", `${type} is deprecated — fullscreen is driven by the Livespace chrome`); break
+        default: log("⚠", `unknown message type ${data.type} — Livespace ignores it`)
+      }
+    })
+
+    function enterFullscreen() {
+      $("frameBox").classList.add("fullscreen")
+      $("fsName").textContent = "Plugin"
+      $("fsOrigin").textContent = pluginOrigin()
+      $("fullscreen").textContent = "Exit fullscreen"
+      post("fullscreen-changed", { active: true })
+    }
+    function exitFullscreen(notify = true) {
+      if (!$("frameBox").classList.contains("fullscreen")) return
+      $("frameBox").classList.remove("fullscreen")
+      $("fullscreen").textContent = "Enter fullscreen"
+      if (notify) post("fullscreen-changed", { active: false })
+    }
+
+    $("embed").onchange = () => { const s = SAMPLES[$("embed").value]; $("record").value = s ? JSON.stringify(s, null, 2) : "" }
+    $("load").onclick = load
+    $("sendContext").onclick = sendContext
+    $("sendConfig").onclick = sendConfig
+    $("sendPrefs").onclick = sendPrefs
+    $("fullscreen").onclick = () => $("frameBox").classList.contains("fullscreen") ? exitFullscreen() : enterFullscreen()
+    $("fsExit").onclick = () => exitFullscreen()
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") exitFullscreen() })
+    const size = (w, h) => { frame.width = w; frame.height = h; $("w").value = w; $("h").value = h }
+    document.querySelectorAll("[data-w]").forEach((b) => (b.onclick = () => size(b.dataset.w, b.dataset.h)))
+    $("applySize").onclick = () => size($("w").value, $("h").value)
+
+    $("embed").onchange()
+    showDeclared()
   </script>
 </body>
 </html>

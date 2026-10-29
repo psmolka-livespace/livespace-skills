@@ -1,13 +1,13 @@
 # plugin-builder
 
-Build a **Livespace plugin** — a custom extension embedded inside a Livespace profile (**Deal, Company, Person, or Space**). An account administrator registers it (name + HTTPS URL on a Livespace-allowlisted domain) and configures which profile types show it, where, its size, and who can see it.
+Build a **Livespace plugin** — a custom extension embedded inside a Livespace profile (**Deal, Company, Person, or Space**) or opened from the **apps menu**. An account administrator adds it (HTTPS URL on a whitelisted domain), fills in its settings form, and configures where it shows, its size, whether it may open fullscreen or in a dialog, and who can see it.
 
 This plugin is a small **router + two builder sub-skills**:
 
 | Skill | Role |
 |---|---|
 | `plugin-builder` | Intake + routing. Captures *what the plugin should do*, picks the plugin type, hands off. Contains no build detail. |
-| `plugin-iframe-widget` | Builds a **client-only** iframe widget — pure HTML/CSS/JS talking to the host over `window.postMessage`, optionally calling the Livespace API via a one-shot credential handshake. |
+| `plugin-iframe-widget` | Builds a **client-only** iframe widget on the Livespace plugin SDK (`LsPlugin`, protocol v2): live record context, admin settings forms, host toasts, fullscreen/dialog layouts, design tokens, and the Livespace API. Ships a local host harness for testing. |
 | `plugin-iframe-widget-backend` | Adds a **backend** (Node / PHP-Symfony / Python) for plugins that must keep third-party secrets server-side. |
 
 ## How it flows
@@ -24,9 +24,11 @@ plugin-builder  ──(purpose captured, type = iframe widget)──▶  plugin-
 
 This plugin documents the Livespace plugin platform against the official public docs:
 
-- Context / postMessage: <https://plugin.docs.livespace.io/context-messages/>
-- Security model: <https://plugin.docs.livespace.io/security/>
+- **Plugin SDK docs** (authoritative, versioned with each SDK release): <https://plugin-sdk.feature.livespace.dev/v1/llms.txt>, page by page starting at <https://plugin-sdk.feature.livespace.dev/v1/docs/index.md>
+- Platform overview and security model: <https://plugin.docs.livespace.io/>
 - Full API reference (Postman collection): <https://api-docs.livespace.io/>
+
+The builder skills read the SDK docs first and defer to them; their reference files are summaries.
 
 ## Usage
 

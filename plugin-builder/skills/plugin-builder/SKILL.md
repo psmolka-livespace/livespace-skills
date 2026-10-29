@@ -1,14 +1,14 @@
 ---
 name: plugin-builder
-version: "1.0"
-description: Use when the user wants to build a Livespace plugin — a custom extension embedded inside a Livespace deal or company profile. Captures the plugin's purpose, picks the plugin type, and routes to the matching builder sub-skill.
+version: "2.0"
+description: Use when the user wants to build a Livespace plugin — a custom extension embedded in a Livespace deal, company, person or space profile, or opened from the apps menu. Captures the plugin's purpose, picks the plugin type, and routes to the matching builder sub-skill.
 ---
 
 # Plugin Builder
 
 ## Purpose
 
-A **Livespace plugin** is a custom extension embedded inside a Livespace profile — **Deal, Company, Person, or Space**. An account administrator registers it (name + HTTPS URL on a Livespace-allowlisted domain) and configures which profile types show it, where, its size, and who can see it. The widget receives the current record's context from the host and renders something useful for the person viewing that record.
+A **Livespace plugin** is a custom extension embedded inside a Livespace profile — **Deal, Company, Person, or Space** — or opened as a standalone app from the **apps menu**. An account administrator adds it (HTTPS URL on a whitelisted domain, or from the Livespace Catalog), fills in its settings form, and configures where it shows, its size, whether it may open fullscreen or in a dialog, and who can see it. The plugin receives the record being viewed — its full description, kept live — and renders something useful for the person viewing it.
 
 "Plugin" is the umbrella concept. **Today there is one plugin type — the iframe widget** (a client-side app loaded in an `<iframe>`, talking to the host over `window.postMessage`). More types will be added over time; this router exists so that choosing a type is an explicit step, not a baked-in assumption that "plugin" means "iframe".
 
@@ -16,7 +16,7 @@ This skill is the **intake + routing layer**. It captures *what the plugin shoul
 
 Use this skill when:
 - The user asks to build a Livespace plugin / embedded plugin.
-- The user wants to embed a custom panel in a Deal, Company, Person, or Space profile.
+- The user wants to embed a custom panel in a Deal, Company, Person, or Space profile, or add a standalone app to the Livespace apps menu.
 - The task mentions a "plugin on the deal/company/person/space profile" or "iframe in Livespace".
 
 ---
@@ -38,11 +38,12 @@ These principles are referenced by the builder sub-skills (`plugin-iframe-widget
 
 Before any technical decisions, ask the user what the plugin should *do*. Drive this with `AskUserQuestion`, header `Purpose`. Offer 3–4 broad categories as starting points; the auto "Other" lets the user free-text the actual requirements in their own words.
 
-Suggested categories (adjust as needed):
+Suggested categories — pick the four most likely for this user (adjust as needed):
 
 - **Read-only display** — render derived information about the record (KPI, score, commission, status, computed value).
 - **Interactive form** — collect input from the user and submit it somewhere (Livespace API or external).
-- **Shortcut / external link** — a button or link that opens another tool with the record id as context (note: the iframe `sandbox` restricts top-level navigation — see `plugin-iframe-widget` security caveats).
+- **Shortcut / external link** — a button or link that opens another tool in a new tab with the record as context (popups work; navigating Livespace itself does not — see `plugin-iframe-widget` security caveats).
+- **Standalone app** — a tool that is not about one record (a dashboard, a calculator, a search), opened from the apps menu.
 - **Multi-step workflow** — guided process (wizard, approval flow, configuration).
 
 Capture the answer verbatim into the project's `README.md` or `CLAUDE.md` so later work has the original requirement to refer back to. If the user picks "Other", quote their description directly — don't paraphrase.

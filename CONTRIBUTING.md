@@ -24,7 +24,7 @@ Anything merged here is public, so before committing:
 
 - [ ] **No secrets.** No tokens, keys, passwords, private hostnames, or real tenant/customer names. Use env-var placeholders (`%env(...)%`) and obviously-fake sample data (`acme.example`, `localhost:3000`).
 - [ ] **Self-contained links.** Every `[link](...)` and every "see the X skill" resolves within this repo — don't point at a resource a reader can't open.
-- [ ] **Platform claims match the public docs.** Verify anything documenting the Livespace platform against <https://plugin.docs.livespace.io/> and <https://api-docs.livespace.io/>, and link them as authoritative.
+- [ ] **Platform claims match the public docs.** Verify anything documenting the Livespace platform against the plugin SDK docs (<https://plugin-sdk.feature.livespace.dev/v1/llms.txt>), <https://plugin.docs.livespace.io/> and <https://api-docs.livespace.io/>, and link them as authoritative. Where they disagree, the SDK docs are the newest.
 
 A quick grep before committing catches most accidental secrets:
 

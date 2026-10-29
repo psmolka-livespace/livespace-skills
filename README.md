@@ -6,7 +6,7 @@ A [Claude Code](https://docs.claude.com/en/docs/claude-code) **plugin marketplac
 
 | Plugin | What it does |
 |---|---|
-| [`plugin-builder`](./plugin-builder) | Build a **Livespace plugin** — an iframe widget embedded in a Deal, Company, Person, or Space profile. A router skill captures the plugin's purpose and routes to a client-only or backend-enabled builder. |
+| [`plugin-builder`](./plugin-builder) | Build a **Livespace plugin** — an iframe widget embedded in a Deal, Company, Person, or Space profile or the apps menu, on the Livespace plugin SDK. A router skill captures the plugin's purpose and routes to a client-only or backend-enabled builder. |
 
 _More plugins will be added over time._
 

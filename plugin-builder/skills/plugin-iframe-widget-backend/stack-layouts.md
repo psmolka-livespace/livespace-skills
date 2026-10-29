@@ -11,7 +11,7 @@ Load this file once a stack is chosen (see the stack-selection table in `SKILL.m
 ├── server.js                   # SSR shell + /api/... + /healthz
 ├── public/
 │   ├── widget.css
-│   └── widget.js               # postMessage handshake + dynamic rendering
+│   └── widget.js               # LsPlugin (SDK) events + /api calls + rendering
 └── README.md
 ```
 
@@ -31,7 +31,7 @@ Worked example (illustrative): a "JIRA-tasks-for-this-company" widget embedded o
 │   ├── widget.css
 │   ├── app.js                  # registers controllers, imports widget.css
 │   └── controllers/
-│       └── widget_controller.js   # Stimulus controller (handshake + fetch + render)
+│       └── widget_controller.js   # Stimulus controller (LsPlugin events + fetch + render)
 ├── config/
 │   ├── bundles.php
 │   ├── packages/
@@ -65,7 +65,7 @@ Notes on a "minimal" Symfony setup:
 Symfony UX is the "modern dynamic FE" answer for the PHP branch. Key points so the scaffold lands on the first try:
 
 - **AssetMapper, not Encore/Webpack.** No `node_modules`, no build container, no `package.json`. `composer require symfony/asset-mapper symfony/stimulus-bundle` is enough. Assets live in `assets/` and are mapped to `/assets/*` at runtime; importmap is auto-managed via `bin/console importmap:require`.
-- **Stimulus controllers for behaviour.** One `assets/controllers/widget_controller.js` exporting a default class extending `Controller`. Wire it via `data-controller="widget"` on the shell's `<main>` element. Use `connect()` to start the postMessage handshake, `targets` for the body/footer regions, `values` for any config injected from Twig (e.g. backend base URL — usually empty since same-origin).
+- **Stimulus controllers for behaviour.** One `assets/controllers/widget_controller.js` exporting a default class extending `Controller`. Wire it via `data-controller="widget"` on the shell's `<main>` element. Use `connect()` to subscribe to `LsPlugin` events (the SDK itself loads in `<head>`), `targets` for the body/footer regions, `values` for any config injected from Twig (e.g. backend base URL — usually empty since same-origin).
 - **Twig shell renders the static layout + Stimulus mount points.** Example skeleton:
   ```twig
   {# templates/shell.html.twig #}
